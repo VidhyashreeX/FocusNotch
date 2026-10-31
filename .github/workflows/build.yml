@@ -17,10 +17,10 @@ permissions:
 env:
   PROJECT: boringNotch.xcodeproj
   SCHEME: boringNotch
-  DERIVED_DATA: ${{ runner.temp }}/FocusNotchDerivedData
-  SOURCE_PACKAGES: ${{ runner.temp }}/FocusNotchSourcePackages
-  LOG_DIR: ${{ runner.temp }}/FocusNotchLogs
-  ARTIFACT_DIR: ${{ runner.temp }}/FocusNotchArtifacts
+  DERIVED_DATA: /tmp/FocusNotchDerivedData
+  SOURCE_PACKAGES: /tmp/FocusNotchSourcePackages
+  LOG_DIR: /tmp/FocusNotchLogs
+  ARTIFACT_DIR: /tmp/FocusNotchArtifacts
 
 jobs:
   build-and-test:
