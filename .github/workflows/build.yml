@@ -1,0 +1,168 @@
+name: FocusNotch Cloud Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+
+concurrency:
+  group: focusnotch-build-${{ github.ref }}
+  cancel-in-progress: true
+
+# Building and downloading artifacts only requires read access to the repository.
+permissions:
+  contents: read
+
+env:
+  PROJECT: boringNotch.xcodeproj
+  SCHEME: boringNotch
+  DERIVED_DATA: ${{ runner.temp }}/FocusNotchDerivedData
+  SOURCE_PACKAGES: ${{ runner.temp }}/FocusNotchSourcePackages
+  LOG_DIR: ${{ runner.temp }}/FocusNotchLogs
+  ARTIFACT_DIR: ${{ runner.temp }}/FocusNotchArtifacts
+
+jobs:
+  build-and-test:
+    name: Build and test on Xcode 27
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify cloud toolchain and project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOG_DIR" "$ARTIFACT_DIR"
+          xcodebuild -version | tee "$LOG_DIR/xcode-version.log"
+          test -f "$PROJECT/project.pbxproj"
+          test -f "$PROJECT/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+          xcodebuild -list -project "$PROJECT" | tee "$LOG_DIR/project-list.log"
+          grep -q "$SCHEME" "$LOG_DIR/project-list.log" || {
+            echo "::error::Expected scheme '$SCHEME' was not found in $PROJECT"
+            exit 1
+          }
+
+      - name: Resolve pinned Swift packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            2>&1 | tee "$LOG_DIR/resolve-packages.log"
+
+      - name: Run repository script tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover \
+            -s .github/scripts/tests \
+            -p 'test_*.py' \
+            -v 2>&1 | tee "$LOG_DIR/script-tests.log"
+
+      - name: Run Xcode tests when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q 'com.apple.product-type.bundle.unit-test' "$PROJECT/project.pbxproj"; then
+            xcodebuild test \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Debug \
+              -destination 'platform=macOS' \
+              -derivedDataPath "$DERIVED_DATA" \
+              -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+              -disableAutomaticPackageResolution \
+              -resultBundlePath "$LOG_DIR/Tests.xcresult" \
+              CODE_SIGN_IDENTITY=- \
+              DEVELOPMENT_TEAM= \
+              2>&1 | tee "$LOG_DIR/xcode-tests.log"
+          else
+            echo "No Xcode unit-test target is present on this branch; repository script tests completed." \
+              | tee "$LOG_DIR/xcode-tests.log"
+          fi
+
+      - name: Build Release app with an ad-hoc signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
+            -disableAutomaticPackageResolution \
+            -resultBundlePath "$LOG_DIR/Build.xcresult" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= \
+            2>&1 | tee "$LOG_DIR/release-build.log"
+
+      - name: Verify and package application bundle
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$DERIVED_DATA/Build/Products/Release" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$APP_PATH" ]]; then
+            echo "::error::No .app bundle was produced in the Release products directory"
+            exit 1
+          fi
+
+          echo "Built application: $APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH" \
+            2>&1 | tee "$LOG_DIR/codesign-verification.log"
+          codesign -d --entitlements :- "$APP_PATH" \
+            > "$LOG_DIR/app-entitlements.plist" 2> "$LOG_DIR/codesign-details.log"
+
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          ZIP_PATH="$ARTIFACT_DIR/FocusNotch-macOS-${SHORT_SHA}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+          ditto -x -k "$ZIP_PATH" "$RUNNER_TEMP/FocusNotchZipCheck"
+          test -d "$RUNNER_TEMP/FocusNotchZipCheck/$(basename "$APP_PATH")"
+
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "app_name=$(basename "$APP_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload downloadable application
+        uses: actions/upload-artifact@v4
+        with:
+          name: FocusNotch-macOS
+          path: ${{ steps.package.outputs.zip_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build and test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FocusNotch-build-logs-${{ github.run_number }}
+          path: ${{ env.LOG_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write build summary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo '## FocusNotch cloud build succeeded'
+            echo ''
+            echo "- Source commit: \`$GITHUB_SHA\`"
+            echo "- Scheme: \`$SCHEME\`"
+            echo "- Configuration: \`Release\`"
+            echo "- App bundle: \`${{ steps.package.outputs.app_name }}\`"
+            echo '- Signing: ad-hoc only; not Developer ID signed or notarized'
+            echo '- Download the `FocusNotch-macOS` artifact from this workflow run.'
+          } >> "$GITHUB_STEP_SUMMARY"

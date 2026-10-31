@@ -47,6 +47,7 @@ build/
 *.xcscheme
 *.xcodeproj/xcuserdata
 *.xcodeproj/project.xcuserdata
+!boringNotch.xcodeproj/xcshareddata/xcschemes/boringNotch.xcscheme
 
 # Build artifacts
 *.ipa
