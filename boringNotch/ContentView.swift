@@ -22,6 +22,7 @@ struct ContentView: View {
     @ObservedObject var brightnessManager = BrightnessManager.shared
     @ObservedObject var volumeManager = VolumeManager.shared
     @ObservedObject var notificationManager = SystemNotificationManager.shared
+    @ObservedObject var pomodoro = PomodoroManager.shared
     /// Which entry of the closed-notch activity stack is on top.
     @State private var activityIndex: Int = 0
     @State private var hoverTask: Task<Void, Never>?
@@ -107,6 +108,11 @@ struct ContentView: View {
             items.append(.notification(notification))
         }
 
+        let timerFirst = pomodoro.isRunning || (coordinator.expandingView.show && coordinator.expandingView.type == .pomodoro)
+        if showsPomodoroActivity && timerFirst {
+            items.append(.pomodoro)
+        }
+
         let musicIsShowing = (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
             && (musicManager.isPlaying || !musicManager.isPlayerIdle)
             && coordinator.musicLiveActivityEnabled
@@ -116,8 +122,17 @@ struct ContentView: View {
         if musicIsShowing || showingInlineMusicPeek {
             items.append(.music)
         }
-
+        if showsPomodoroActivity && !timerFirst {
+            items.append(.pomodoro)
+        }
         return items
+    }
+
+    private var showsPomodoroActivity: Bool {
+        guard Defaults[.enablePomodoro], Defaults[.pomodoroShowInClosedNotch] else { return false }
+        return coordinator.expandingView.show
+            ? coordinator.expandingView.type == .pomodoro
+            : pomodoro.isActive
     }
 
     /// A notification is a glance, not a workspace — it doesn't need the full
@@ -211,6 +226,11 @@ struct ContentView: View {
                 // narrower than what's on screen.
                 if showingInlineMusicPeek {
                     chinWidth += 2 * inlineMusicPeekLabelWidth
+                }
+            case .pomodoro:
+                chinWidth += PomodoroLiveActivity.sideWidth * 2 + 2 * liveActivityEdgeMargin
+                if coordinator.expandingView.show && coordinator.expandingView.type == .pomodoro {
+                    chinWidth += PomodoroLiveActivity.announcementWidth - PomodoroLiveActivity.sideWidth
                 }
             }
         } else if !coordinator.expandingView.show && vm.notchState == .closed
@@ -454,6 +474,8 @@ struct ContentView: View {
                               case .music:
                                   MusicLiveActivity()
                                       .frame(alignment: .center)
+                              case .pomodoro:
+                                  PomodoroLiveActivity()
                               }
                           }
                       } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed {
@@ -556,6 +578,16 @@ struct ContentView: View {
                                 dropInteraction: vm.dropInteraction,
                                 animation: vm.animation
                             )
+                        case .timer:
+                            if Defaults[.enablePomodoro] {
+                                PomodoroView()
+                            } else {
+                                NotchHomeView(
+                                    albumArtNamespace: albumArtNamespace,
+                                    horizontalMediaGestureFeedback: horizontalMediaGestureFeedback,
+                                    isHoveringMusicArea: $isHoveringMusicArea
+                                )
+                            }
                         }
                     }
                 }
