@@ -30,6 +30,14 @@ class WorkflowSmokeTests(unittest.TestCase):
         self.manual_build = (REPOSITORY_ROOT / ".github" / "workflows" / "manual_build.yml").read_text(
             encoding="utf-8"
         )
+        self.cloud_build = (REPOSITORY_ROOT / ".github" / "workflows" / "build.yml").read_text(
+            encoding="utf-8"
+        )
+
+    def test_cloud_adhoc_build_disables_hardened_runtime(self) -> None:
+        self.assertIn("ENABLE_HARDENED_RUNTIME=NO", self.cloud_build)
+        self.assertIn("flags=.*runtime", self.cloud_build)
+        self.assertIn("Embedded ad-hoc frameworks will be rejected at launch", self.cloud_build)
 
     def test_nightly_uses_the_fixed_rolling_tag_and_asset(self) -> None:
         self.assertIn("TAG: nightly", self.nightly)
