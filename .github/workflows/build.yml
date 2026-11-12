@@ -107,6 +107,7 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_IDENTITY=- \
             DEVELOPMENT_TEAM= \
+            ENABLE_HARDENED_RUNTIME=NO \
             2>&1 | tee "$LOG_DIR/release-build.log"
 
       - name: Verify and package application bundle
@@ -123,8 +124,14 @@ jobs:
           echo "Built application: $APP_PATH"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH" \
             2>&1 | tee "$LOG_DIR/codesign-verification.log"
+          codesign -d --verbose=4 "$APP_PATH" \
+            2>&1 | tee "$LOG_DIR/codesign-details.log"
+          if grep -Eq 'flags=.*runtime' "$LOG_DIR/codesign-details.log"; then
+            echo "::error::The ad-hoc app still has Hardened Runtime enabled. Embedded ad-hoc frameworks will be rejected at launch."
+            exit 1
+          fi
           codesign -d --entitlements :- "$APP_PATH" \
-            > "$LOG_DIR/app-entitlements.plist" 2> "$LOG_DIR/codesign-details.log"
+            > "$LOG_DIR/app-entitlements.plist" 2>> "$LOG_DIR/codesign-details.log"
 
           SHORT_SHA="${GITHUB_SHA:0:7}"
           ZIP_PATH="$ARTIFACT_DIR/FocusNotch-macOS-${SHORT_SHA}.zip"
